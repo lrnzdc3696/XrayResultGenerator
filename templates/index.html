@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Iñigo's Clinic Report Generator</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/theme.css"/>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="topbar-icon">🏥</span>
+  <span class="topbar-title">Iñigo's Clinic Report Generator</span>
+  <div class="topbar-nav">
+    <a href="/" class="topbar-link active">📝 New Report</a>
+    <a href="/history_page" class="topbar-link">🗂️ History</a>
+    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">
+      <span class="theme-icon" id="themeIcon">🌙</span>
+      <span id="themeLabel">Dark</span>
+    </button>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- LEFT: Input -->
+  <div class="panel panel-left">
+    <div class="panel-header">
+      <span class="step-badge active" id="badge1">STEP 1</span>
+      <span class="panel-title">Raw Doctor Input</span>
+    </div>
+    <div>
+      <div class="input-label">Paste raw text (single or multiple patients)</div>
+      <textarea id="rawInput" placeholder="Paste the full input here — header list on top, then report blocks below..."></textarea>
+    </div>
+    <div class="loading-bar" id="loadingBar">
+      <div class="spinner"></div>
+      <span>AI is parsing and correcting reports…</span>
+    </div>
+    <div class="notif" id="errorNotif"></div>
+    <div class="actions-row">
+      <button class="btn btn-primary" id="parseBtn" onclick="parseReport()">⚡ Parse &amp; Correct</button>
+      <button class="btn btn-ghost" onclick="clearAll()">✕ Clear</button>
+    </div>
+    <div style="margin-top:auto; padding-top:14px; border-top:1px dashed var(--border);">
+      <div class="input-label">Quick load</div>
+      <button class="btn btn-ghost" style="font-size:11px; padding:6px 12px;" onclick="loadExample()">Load sample (8 patients)</button>
+    </div>
+  </div>
+
+  <!-- RIGHT: Results -->
+  <div class="panel panel-right">
+    <div class="panel-header">
+      <span class="step-badge" id="badge2">STEP 2</span>
+      <span class="panel-title">Review, Edit &amp; Generate</span>
+    </div>
+
+    <div id="emptyState" class="empty-state">
+      <div class="empty-state-icon">📋</div>
+      <div class="empty-state-text">Parsed reports will appear here</div>
+      <div class="empty-state-hint">← Paste input and click Parse &amp; Correct</div>
+    </div>
+
+    <div id="resultSection" style="display:none; flex-direction:column; gap:16px;">
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <span id="summaryBadge" class="summary-badge">📋 0 patients</span>
+        <button class="btn btn-success" onclick="generateOverlayPDF()" id="overlayBtn">🖨️ Print on Template</button>
+        <button class="btn btn-ghost" onclick="generatePDF()" id="pdfBtn">📄 Full Report PDF</button>
+        <button class="btn btn-save" onclick="saveSession()" id="saveBtn">💾 Save to History</button>
+      </div>
+      <div class="tabs-bar" id="tabsBar"></div>
+      <div id="patientPanels"></div>
+      <div class="notif" id="pdfNotif"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── THEME ──────────────────────────────────────────────────────────────
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    document.getElementById("themeIcon").textContent = theme === "dark" ? "☀️" : "🌙";
+    document.getElementById("themeLabel").textContent = theme === "dark" ? "Light" : "Dark";
+    localStorage.setItem("clinic-theme", theme);
+  }
+  function toggleTheme() {
+    const current = document.documentElement.getAttribute("data-theme");
+    applyTheme(current === "dark" ? "light" : "dark");
+  }
+  // Apply saved theme immediately
+  applyTheme(localStorage.getItem("clinic-theme") || "light");
+
+  // ── DATA ───────────────────────────────────────────────────────────────
+  let allPatients = [];
+
+  const EXAMPLE = `3/9/2026
+16626 Aggabao,Lance Aaron 16/M Cxr last xray 01/05/26 PTB W/Film Comparison
+16627 Menase,Alyanna Marie 23/F Cxr back pain
+16628 Vargas,Sherry Ann 39/F Cxr Left side pain
+16629 Pante,Alden 51/M Cxr Hemophysis
+16630 Makahis,Marilyn 46/F Cxr last xray 12/26/25 PTB W/Film Comparison
+16631 Casaljay,Tirso 51/M Cxr DOB
+16632 Sevandra,Cecil 35/F Cxr Upper back pain
+16633 Agsaoay,Efren 71/M Cxr Cough for 2 Weeks
+
+
+Aggabao
+Last examination  02-05-26 reviewed present film show clearing in the left upper lungfield kochs infiltrates
+Hne
+Dsi
+Impression
+Healed kochs infection
+
+Manase
+There are suspicious infiltrates noted in both upper lobes
+Hne
+Dsi
+Suggest apicolordotic view
+
+Vargas
+Normal chest
+
+Pante
+There are hazed infiltrates noted in the rt upper lf
+Hazy and reticular infiltrates are noted in the rt lower lf
+Hne
+Dsi
+Impression
+Kochs infection rt upper lf
+Pneumonia rt lower lf
+
+Makahis
+Last examination 12-26-25 reviewed present film show clearing in the previously noted kochs pneumonia
+Hne
+Dsi
+Impression
+Healed kochs pneumonia
+
+Casaliay
+Take apicolordotic view
+
+Saavedra
+There are few reticulohazed infiltrates noted in the left upper lf
+Hne
+Dsi
+Impression
+Kochs infection left upper lf
+
+Agsaoy
+There are hazy densities noted in both lower lfs
+Hne
+Dsi
+Impression
+Pneumonia both lower lfs`;
+
+  function loadExample() { document.getElementById("rawInput").value = EXAMPLE; }
+
+  function clearAll() {
+    document.getElementById("rawInput").value = "";
+    document.getElementById("emptyState").style.display = "flex";
+    document.getElementById("resultSection").style.display = "none";
+    document.getElementById("badge1").className = "step-badge active";
+    document.getElementById("badge2").className = "step-badge";
+    showError(""); allPatients = [];
+  }
+
+  function showError(msg) {
+    const el = document.getElementById("errorNotif");
+    if (msg) { el.textContent = "⚠ " + msg; el.className = "notif error show"; }
+    else { el.className = "notif"; }
+  }
+
+  function showPdfNotif(msg, type) {
+    const el = document.getElementById("pdfNotif");
+    el.textContent = msg; el.className = "notif " + type + " show";
+    setTimeout(() => { el.className = "notif"; }, 5000);
+  }
+
+  async function parseReport() {
+    const text = document.getElementById("rawInput").value.trim();
+    if (!text) { showError("Please paste doctor's input first."); return; }
+    const btn = document.getElementById("parseBtn");
+    btn.disabled = true;
+    document.getElementById("loadingBar").classList.add("show");
+    showError("");
+    try {
+      const res = await fetch("/parse", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({text}) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      allPatients = data.data;
+      renderAll();
+      document.getElementById("emptyState").style.display = "none";
+      document.getElementById("resultSection").style.display = "flex";
+      document.getElementById("badge1").className = "step-badge done";
+      document.getElementById("badge2").className = "step-badge active";
+    } catch(err) { showError("Failed to parse: " + err.message); }
+    finally { btn.disabled = false; document.getElementById("loadingBar").classList.remove("show"); }
+  }
+
+  function renderAll() {
+    const tabsBar = document.getElementById("tabsBar");
+    const panels = document.getElementById("patientPanels");
+    document.getElementById("summaryBadge").textContent = `📋 ${allPatients.length} patient${allPatients.length!==1?"s":""}`;
+    tabsBar.innerHTML = ""; panels.innerHTML = "";
+    allPatients.forEach((p, i) => {
+      const tab = document.createElement("button");
+      tab.className = "tab-btn" + (i===0?" active":"");
+      tab.textContent = `${p.case_no||i+1} · ${(p.name||"Patient").split(",")[0]}`;
+      tab.onclick = () => switchTab(i);
+      tabsBar.appendChild(tab);
+      const panel = document.createElement("div");
+      panel.className = "patient-panel" + (i===0?" active":"");
+      panel.id = `panel_${i}`;
+      panel.innerHTML = buildPatientHTML(p, i);
+      panels.appendChild(panel);
+    });
+  }
+
+  function buildPatientHTML(p, i) {
+    const impression = (p.impression||"").trim();
+    const reportHTML = (p.report||"").trim().split("\n").filter(l=>l.trim()).map(l=>`<div style="margin-bottom:4px;">• ${l.trim()}</div>`).join("");
+    const impressionHTML = impression.split("\n").filter(l=>l.trim()).map(l=>`<div style="margin-bottom:4px;">• ${l.trim()}</div>`).join("");
+    return `
+      <div class="output-card">
+        <div class="output-card-header">
+          <span>📄 ${p.name||""}</span>
+          <button onclick="toggleEdit(${i})" id="editToggle_${i}" style="background:rgba(255,255,255,0.15);border:none;color:white;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-family:var(--mono);">✏️ EDIT</button>
+        </div>
+        <div class="output-card-body">
+          <div class="output-label">Patient</div><div class="output-value">${p.name||"—"}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;">
+            <div><div class="output-label">Case No.</div><div class="output-value">${p.case_no||"—"}</div></div>
+            <div><div class="output-label">Age / Sex</div><div class="output-value">${p.age||"—"} / ${p.sex||"—"}</div></div>
+            <div><div class="output-label">Date</div><div class="output-value" style="font-size:12px;">${p.date_of_exam||"—"}</div></div>
+          </div>
+          <div class="output-label" style="margin-top:10px;">Examination</div>
+          <div class="output-value" style="font-size:13px;">${p.examination||"—"}</div>
+          <div class="output-label" style="margin-top:10px;">Report</div>
+          <div class="output-text">${reportHTML||"—"}</div>
+          ${impression?`<div class="output-label" style="margin-top:10px;">Impression</div><div class="output-impression">${impressionHTML}</div>`:""}
+        </div>
+        <div id="editForm_${i}" style="display:none;padding:14px;border-top:1px solid var(--border);background:var(--surface2);">
+          <div class="field-grid">
+            <div class="field-group"><label>Patient Name</label><input id="e_name_${i}" value="${esc(p.name||"")}"/></div>
+            <div class="field-group"><label>Case No.</label><input id="e_case_${i}" value="${esc(p.case_no||"")}"/></div>
+            <div class="field-group"><label>Age</label><input id="e_age_${i}" value="${esc(String(p.age||""))}"/></div>
+            <div class="field-group"><label>Sex</label><input id="e_sex_${i}" value="${esc(p.sex||"")}"/></div>
+            <div class="field-group"><label>Date of Exam</label><input id="e_date_${i}" value="${esc(p.date_of_exam||"")}"/></div>
+            <div class="field-group"><label>Examination</label><input id="e_exam_${i}" value="${esc(p.examination||"")}"/></div>
+            <div class="field-group full"><label>Report (one finding per line)</label><textarea class="field-ta" id="e_report_${i}">${esc(p.report||"")}</textarea></div>
+            <div class="field-group full"><label>Impression (one per line)</label><textarea class="field-ta" id="e_impression_${i}">${esc(p.impression||"")}</textarea></div>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px;">
+            <button class="btn btn-primary" style="font-size:12px;padding:7px 14px;" onclick="applyEdit(${i})">✓ Apply</button>
+            <button class="btn btn-ghost" style="font-size:12px;padding:7px 14px;" onclick="toggleEdit(${i})">✕ Cancel</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function esc(s) { return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+  function switchTab(i) {
+    document.querySelectorAll(".tab-btn").forEach((t,idx)=>t.classList.toggle("active",idx===i));
+    document.querySelectorAll(".patient-panel").forEach((p,idx)=>p.classList.toggle("active",idx===i));
+  }
+
+  function toggleEdit(i) {
+    const form = document.getElementById(`editForm_${i}`);
+    const btn = document.getElementById(`editToggle_${i}`);
+    const isHidden = form.style.display==="none";
+    form.style.display = isHidden?"block":"none";
+    btn.textContent = isHidden?"✕ CLOSE":"✏️ EDIT";
+  }
+
+  function applyEdit(i) {
+    allPatients[i].name         = document.getElementById(`e_name_${i}`).value;
+    allPatients[i].case_no      = document.getElementById(`e_case_${i}`).value;
+    allPatients[i].age          = document.getElementById(`e_age_${i}`).value;
+    allPatients[i].sex          = document.getElementById(`e_sex_${i}`).value;
+    allPatients[i].date_of_exam = document.getElementById(`e_date_${i}`).value;
+    allPatients[i].examination  = document.getElementById(`e_exam_${i}`).value;
+    allPatients[i].report       = document.getElementById(`e_report_${i}`).value;
+    allPatients[i].impression   = document.getElementById(`e_impression_${i}`).value;
+    document.getElementById(`panel_${i}`).innerHTML = buildPatientHTML(allPatients[i], i);
+    document.querySelectorAll(".tab-btn")[i].textContent = `${allPatients[i].case_no||i+1} · ${(allPatients[i].name||"Patient").split(",")[0]}`;
+    showPdfNotif("✓ Changes saved for " + allPatients[i].name, "success");
+  }
+
+  async function generateOverlayPDF() {
+    if (!allPatients.length) return;
+    const btn = document.getElementById("overlayBtn");
+    btn.disabled = true; btn.textContent = "⏳ Generating…";
+    try {
+      const res = await fetch("/generate_overlay_pdf", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({patients:allPatients}) });
+      if (!res.ok) throw new Error("Server error");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      const a = document.createElement("a"); a.href=url; a.download="overlay_template.pdf"; a.click();
+      showPdfNotif("✓ Template overlay PDF ready! Load your template paper and print.", "success");
+    } catch(err) { showPdfNotif("✗ Failed: " + err.message, "error"); }
+    finally { btn.disabled=false; btn.textContent="🖨️ Print on Template"; }
+  }
+
+  async function generatePDF() {
+    if (!allPatients.length) return;
+    const btn = document.getElementById("pdfBtn");
+    btn.disabled = true; btn.textContent = "⏳ Generating…";
+    try {
+      const res = await fetch("/generate_pdf", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({patients:allPatients}) });
+      if (!res.ok) throw new Error("Server error");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      const a = document.createElement("a"); a.href=url; a.download="clinic_reports.pdf"; a.click();
+      showPdfNotif(`✓ PDF generated with ${allPatients.length} report(s)!`, "success");
+    } catch(err) { showPdfNotif("✗ Failed: " + err.message, "error"); }
+    finally { btn.disabled=false; btn.textContent="🖨️ Print All as PDF"; }
+  }
+
+  async function saveSession() {
+    if (!allPatients.length) return;
+    const btn = document.getElementById("saveBtn");
+    btn.disabled=true; btn.textContent="💾 Saving…";
+    try {
+      const res = await fetch("/save_session", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({patients:allPatients}) });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      showPdfNotif("✓ Saved to history! View it in the History tab.", "success");
+    } catch(err) { showPdfNotif("✗ Failed to save: " + err.message, "error"); }
+    finally { btn.disabled=false; btn.textContent="💾 Save to History"; }
+  }
+</script>
+</body>
+</html>

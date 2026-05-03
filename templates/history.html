@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Report History – Iñigo's Clinic</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/theme.css"/>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="topbar-icon">🏥</span>
+  <span class="topbar-title">Iñigo's Clinic Report Generator</span>
+  <div class="topbar-nav">
+    <a href="/" class="topbar-link">📝 New Report</a>
+    <a href="/history_page" class="topbar-link active">🗂️ History</a>
+    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">
+      <span class="theme-icon" id="themeIcon">🌙</span>
+      <span id="themeLabel">Dark</span>
+    </button>
+  </div>
+</div>
+
+<div class="page">
+  <div class="page-header">
+    <div class="page-title">🗂️ Report History</div>
+    <div class="search-box">
+      <input class="search-input" id="searchInput" placeholder="Search by name, case no, or date…" oninput="loadHistory()"/>
+      <button class="btn btn-ghost" onclick="document.getElementById('searchInput').value='';loadHistory();">✕</button>
+    </div>
+  </div>
+  <div id="historyContainer">
+    <div class="center-msg"><div class="big-spinner"></div><p>Loading history…</p></div>
+  </div>
+</div>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modalTitle">Patient Report</span>
+      <button class="modal-close" onclick="closeModalDirect()">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModalDirect()">Close</button>
+      <button class="btn btn-success" id="modalOverlayBtn">🖨️ Print on Template</button>
+      <button class="btn btn-ghost" id="modalPrintBtn">📄 Full PDF</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── THEME ──────────────────────────────────────────────────────────────
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    document.getElementById("themeIcon").textContent = theme==="dark"?"☀️":"🌙";
+    document.getElementById("themeLabel").textContent = theme==="dark"?"Light":"Dark";
+    localStorage.setItem("clinic-theme", theme);
+  }
+  function toggleTheme() {
+    applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
+  }
+  applyTheme(localStorage.getItem("clinic-theme")||"light");
+
+  // ── HISTORY ────────────────────────────────────────────────────────────
+  let allSessions = [];
+
+  async function loadHistory() {
+    const search = document.getElementById("searchInput").value.trim();
+    try {
+      const res = await fetch(`/history?search=${encodeURIComponent(search)}`);
+      const data = await res.json();
+      allSessions = data.sessions || [];
+      renderHistory(allSessions);
+    } catch(err) {
+      document.getElementById("historyContainer").innerHTML = `<div class="center-msg"><p>Error: ${err.message}</p></div>`;
+    }
+  }
+
+  function renderHistory(sessions) {
+    const container = document.getElementById("historyContainer");
+    if (!sessions.length) {
+      container.innerHTML = `<div class="center-msg"><div class="icon">📭</div><p>No saved reports found.</p></div>`;
+      return;
+    }
+    container.innerHTML = sessions.map(s => `
+      <div class="session-card" id="sess_${s.id}">
+        <div class="session-header" onclick="toggleSession(${s.id})">
+          <div class="session-date-badge">📅 ${s.date_of_exam||"—"}</div>
+          <div class="session-meta">
+            <div class="session-title">${s.names.slice(0,3).join(", ")}${s.names.length>3?` +${s.names.length-3} more`:""}</div>
+            <div class="session-sub">Saved: ${s.saved_at} · Session #${s.id}</div>
+          </div>
+          <span class="patient-count-badge">👤 ${s.patient_count} patient${s.patient_count!==1?"s":""}</span>
+          <div class="session-actions" onclick="event.stopPropagation()">
+            <button class="btn btn-success" style="font-size:12px;padding:7px 14px;" onclick="reprintOverlay(${s.id})">🖨️ Print on Template</button>
+            <button class="btn btn-ghost" style="font-size:12px;padding:7px 14px;" onclick="reprintSession(${s.id})">📄 Full PDF</button>
+            <button class="btn btn-danger" style="font-size:12px;padding:7px 12px;" onclick="deleteSession(${s.id})">🗑️</button>
+          </div>
+          <span class="chevron" id="chev_${s.id}">›</span>
+        </div>
+        <div class="session-body" id="body_${s.id}">
+          ${s.patients.map((p,pi) => `
+            <div class="patient-row">
+              <div class="patient-case">#${p.case_no||"—"}</div>
+              <div class="patient-name">${p.name||"—"}</div>
+              <div class="patient-info">${p.age||"—"} / ${p.sex||"—"} &nbsp;·&nbsp; ${p.examination||"—"}</div>
+              <div class="patient-impression">${(p.impression||"").split("\n")[0]||"—"}</div>
+              <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;" onclick="showDetail(${s.id},${pi})">👁 View</button>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `).join("");
+  }
+
+  function toggleSession(id) {
+    document.getElementById(`body_${id}`).classList.toggle("open");
+    document.getElementById(`chev_${id}`).classList.toggle("open");
+  }
+
+  function showDetail(sessionId, patientIdx) {
+    const session = allSessions.find(s=>s.id===sessionId);
+    if (!session) return;
+    const p = session.patients[patientIdx];
+    const reportLines = (p.report||"").trim().split("\n").filter(l=>l.trim()).map(l=>`• ${l.trim()}`).join("<br>");
+    const impressionLines = (p.impression||"").trim().split("\n").filter(l=>l.trim()).map(l=>`• ${l.trim()}`).join("<br>");
+    document.getElementById("modalTitle").textContent = `${p.name||"Patient"} — Case #${p.case_no||"—"}`;
+    document.getElementById("modalBody").innerHTML = `
+      <div class="detail-label">Patient Name</div><div class="detail-value">${p.name||"—"}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:12px;">
+        <div><div class="detail-label">Case No.</div><div class="detail-value">${p.case_no||"—"}</div></div>
+        <div><div class="detail-label">Age / Sex</div><div class="detail-value">${p.age||"—"} / ${p.sex||"—"}</div></div>
+        <div><div class="detail-label">Date</div><div class="detail-value" style="font-size:13px;">${p.date_of_exam||"—"}</div></div>
+      </div>
+      <div class="detail-label" style="margin-top:12px;">Examination</div><div class="detail-value" style="font-size:13px;">${p.examination||"—"}</div>
+      <div class="detail-label" style="margin-top:12px;">Report</div><div class="detail-text">${reportLines||"—"}</div>
+      ${impressionLines?`<div class="detail-label" style="margin-top:12px;">Impression</div><div class="detail-impression">${impressionLines}</div>`:""}
+    `;
+    document.getElementById("modalPrintBtn").onclick = () => printSinglePatient(p);
+    document.getElementById("modalOverlayBtn").onclick = () => printOverlaySingle(p);
+    document.getElementById("modalOverlay").classList.add("open");
+  }
+
+  function closeModal(e) { if (e.target===document.getElementById("modalOverlay")) closeModalDirect(); }
+  function closeModalDirect() { document.getElementById("modalOverlay").classList.remove("open"); }
+
+  async function printSinglePatient(patient) {
+    const res = await fetch("/generate_pdf", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({patients:[patient]}) });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url,"_blank");
+    const a=document.createElement("a"); a.href=url; a.download=`report_${patient.case_no}.pdf`; a.click();
+  }
+
+  async function printOverlaySingle(patient) {
+    const res = await fetch("/generate_overlay_pdf", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({patients:[patient]}) });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url,"_blank");
+    const a=document.createElement("a"); a.href=url; a.download=`overlay_${patient.case_no}.pdf`; a.click();
+  }
+
+  async function reprintOverlay(sessionId) {
+    const res = await fetch(`/reprint_overlay_pdf/${sessionId}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url,"_blank");
+    const a=document.createElement("a"); a.href=url; a.download=`overlay_session_${sessionId}.pdf`; a.click();
+  }
+
+  async function reprintSession(sessionId) {
+    const res = await fetch(`/reprint_pdf/${sessionId}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url,"_blank");
+    const a=document.createElement("a"); a.href=url; a.download=`session_${sessionId}.pdf`; a.click();
+  }
+
+  async function deleteSession(sessionId) {
+    if (!confirm("Delete this session? This cannot be undone.")) return;
+    await fetch(`/delete_session/${sessionId}`, {method:"DELETE"});
+    loadHistory();
+  }
+
+  loadHistory();
+</script>
+</body>
+</html>
